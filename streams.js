@@ -1,46 +1,36 @@
-import QueryStream from "pg-query-stream";
-import { Transform } from "stream";
-import fileStream from "fs";
-import { createDatabasePool } from "./database.js";
+import { pipeline } from 'node:stream/promises'
+import fs from "node:fs";
+import { createDatabase } from "./database.js";
 
-const pool = createDatabasePool();
-
-const queryStream = new QueryStream(
-  "SELECT * FROM generate_series(0, $1) num",
-  [1000000],
-  { batchSize: 1000 }
-);
-
-//Transform Stream:  stream to string
-
-const transformStream = new Transform({
-  objectMode: true,
-  transform(row, encoding, callback) {
+const generateLine = (row) => {
     row.description = `Row ${row.num}`;
     row.date = new Date().toString();
-    callback(null, `${row.num}, ${row.description}, ${row.date}` + "\n");
-  },
-});
+    return `${row.num}, ${row.description}, ${row.date}` + "\n"
+}
 
-// Writeable Stream:  stream to file
-const fileWriteStream = fileStream.createWriteStream("output.csv");
-
-const startStream = (transformStream, writeStream) => {
-  console.log("STARTED ", new Date());
-  pool.connect((err, client, done) => {
-    if (err) console.error(err);
-
-    const stream = client.query(queryStream);
-
-    stream
-      .pipe(transformStream)
-      .pipe(writeStream)
-      .on("error", console.error)
-      .on("finish", () => {
-        console.log("FINISHED: ", new Date());
-        done();
-      });
-  });
+const startStream = async () => {
+  //const file = Bun.file("output.csv");
+  //const writer = file.writer();
+  const startTime = Date.now();
+  const sql = createDatabase();
+  const cursor = sql`SELECT * FROM generate_series(0, 1000000) num`.cursor(1000)
+  try {
+    // comment this await pipeline if you will use Bun
+    await pipeline(cursor, async function* (source, { signal }) { 
+      for await (const [row] of source) {
+        yield generateLine(row);
+      }
+    }, fs.createWriteStream("output.csv"))
+    /* this is for Bun
+    for await (const [row] of cursor) {
+      writer.write(generateLine(row));
+    }
+    writer.end();*/
+  const endTime = Date.now()
+  console.log(`Time taken: ${endTime - startTime} ms`)
+  } catch (e) {
+    console.error(e)
+  }
 };
 
-startStream(transformStream, fileWriteStream);
+await startStream().catch(e => console.error(e));
